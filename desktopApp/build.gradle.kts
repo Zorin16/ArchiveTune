@@ -63,7 +63,7 @@ dependencies {
     implementation(libs.coroutines.core)
     implementation("com.github.kwhat:jnativehook:2.2.2")
     implementation("org.xerial:sqlite-jdbc:3.53.4.0")
-    implementation("com.ibm.icu:icu4j:76.1")
+    implementation("com.ibm.icu:icu4j:78.3")
     implementation(libs.ktor.serialization.json)
 
     listOf("base", "graphics", "media").forEach { module ->
