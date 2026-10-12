@@ -1,4 +1,4 @@
-name: Build APKs
+name: Build APKs and Desktop Installers
 
 on:
   workflow_dispatch:
@@ -255,6 +255,138 @@ jobs:
         with:
           name: ${{ steps.variant.outputs.artifact_name }}
           path: ${{ steps.release_dir.outputs.release_dir }}/out/${{ steps.variant.outputs.apk_name }}
+
+  build_desktop:
+    name: Build Desktop Installers (${{ matrix.platform }})
+    if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+          - runner: windows-latest
+            platform: windows
+          - runner: macos-latest
+            platform: macos
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-cleanup: on-success
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+
+      - name: Grant execute permission for Gradle wrapper
+        if: matrix.platform != 'windows'
+        run: chmod +x ./gradlew
+
+      - name: Install Linux packaging tools
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes rpm fakeroot
+
+      - name: Install WiX Toolset for Windows installers
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          choco install wixtoolset --version=3.14.1.20250415 --yes --no-progress
+          $wixRoot = Get-ChildItem "${env:ProgramFiles(x86)}\WiX Toolset*" -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            Select-Object -First 1
+          if (-not $wixRoot) {
+            throw 'WiX Toolset was not found after installation; jpackage requires WiX to create MSI/EXE installers.'
+          }
+          $wixBin = Join-Path $wixRoot.FullName 'bin'
+          if (-not (Test-Path (Join-Path $wixBin 'candle.exe'))) {
+            throw "WiX compiler candle.exe was not found under $wixBin"
+          }
+          $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build Linux installers (.deb and .rpm)
+        if: matrix.platform == 'linux'
+        run: ./gradlew :desktopApp:packageDeb :desktopApp:packageRpm --no-daemon
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          API_BEARER_TOKEN: ${{ secrets.API_BEARER_TOKEN }}
+          TOGETHER_BEARER_TOKEN: ${{ secrets.TOGETHER_BEARER_TOKEN }}
+          CANVAS_BEARER_TOKEN: ${{ secrets.CANVAS_BEARER_TOKEN }}
+          EXTRACTOR_BEARER: ${{ secrets.EXTRACTOR_BEARER }}
+
+      - name: Build Windows installers (.msi and .exe)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: .\gradlew.bat :desktopApp:packageMsi :desktopApp:packageExe --no-daemon
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          API_BEARER_TOKEN: ${{ secrets.API_BEARER_TOKEN }}
+          TOGETHER_BEARER_TOKEN: ${{ secrets.TOGETHER_BEARER_TOKEN }}
+          CANVAS_BEARER_TOKEN: ${{ secrets.CANVAS_BEARER_TOKEN }}
+          EXTRACTOR_BEARER: ${{ secrets.EXTRACTOR_BEARER }}
+
+      - name: Build macOS installer (.dmg)
+        if: matrix.platform == 'macos'
+        run: ./gradlew :desktopApp:packageDmg --no-daemon
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          API_BEARER_TOKEN: ${{ secrets.API_BEARER_TOKEN }}
+          TOGETHER_BEARER_TOKEN: ${{ secrets.TOGETHER_BEARER_TOKEN }}
+          CANVAS_BEARER_TOKEN: ${{ secrets.CANVAS_BEARER_TOKEN }}
+          EXTRACTOR_BEARER: ${{ secrets.EXTRACTOR_BEARER }}
+
+      - name: Collect Linux/macOS installers
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p desktop-dist
+          find desktopApp/build/compose/binaries -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' \) \
+            -exec cp -v {} desktop-dist/ \;
+          if ! find desktop-dist -maxdepth 1 -type f -print -quit | grep -q .; then
+            echo 'No desktop installer was generated.' >&2
+            find desktopApp/build/compose/binaries -maxdepth 8 -type f -print || true
+            exit 1
+          fi
+
+      - name: Collect Windows installers
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop-dist | Out-Null
+          $installers = Get-ChildItem 'desktopApp/build/compose/binaries' -Recurse -File |
+            Where-Object { $_.Extension -in @('.msi', '.exe') }
+          if (-not $installers) {
+            Get-ChildItem 'desktopApp/build/compose/binaries' -Recurse -File -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName
+            throw 'No Windows desktop installer was generated.'
+          }
+          $installers | ForEach-Object { Copy-Item $_.FullName 'desktop-dist/' -Force }
+          Get-ChildItem desktop-dist
+
+      - name: Upload desktop installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: archivetune-desktop-${{ matrix.platform }}-release
+          path: desktop-dist/*
+          if-no-files-found: error
+          retention-days: 30
 
   aggregateAndSend:
     name: Send APKs to Telegram
