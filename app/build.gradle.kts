@@ -68,7 +68,7 @@ android {
         minSdk = 26
         targetSdk = 37
         versionCode = 142
-        versionName = "15.1.0"
+        versionName = "offline-1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -223,7 +223,7 @@ android {
         }
         debug {
             buildConfigField("boolean", "GATEKEEPER_ENABLED", "false")
-            applicationIdSuffix = ".debug"
+            applicationIdSuffix = ".offline"
             isDebuggable = true
         }
         create("nightly") {
